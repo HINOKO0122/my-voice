@@ -3,53 +3,62 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Karaoke Monitor - Reverb Edition</title>
+    <title>High-Quality Voice Monitor</title>
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #1a1a1a; color: white; }
-        .card { background: #2d2d2d; padding: 2rem; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); text-align: center; width: 300px; }
-        button { width: 100%; padding: 12px; margin: 10px 0; font-size: 1rem; cursor: pointer; border: none; border-radius: 8px; font-weight: bold; transition: 0.2s; }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #121212; color: #e0e0e0; margin: 0; }
+        .card { background: #1e1e1e; padding: 2.5rem; border-radius: 20px; box-shadow: 0 15px 35px rgba(0,0,0,0.5); text-align: center; width: 320px; border: 1px solid #333; }
+        h2 { margin-bottom: 0.5rem; color: #fff; }
+        .warning { color: #ff9800; font-size: 0.85rem; margin-bottom: 1.5rem; line-height: 1.4; }
+        button { width: 100%; padding: 14px; margin: 8px 0; font-size: 1rem; cursor: pointer; border: none; border-radius: 10px; font-weight: bold; transition: all 0.2s ease; }
         .start-btn { background: #007bff; color: white; }
-        .reverb-btn { background: #6c757d; color: white; }
-        .reverb-on { background: #e91e63; } /* リバーブ中の色 */
-        .status { margin-top: 1rem; font-size: 0.9rem; color: #aaa; }
-        .warning { color: #ffc107; font-size: 0.8rem; margin-bottom: 1rem; }
+        .start-btn:hover { background: #0069d9; }
+        .reverb-btn { background: #444; color: #bbb; }
+        .reverb-btn.active { background: #ff4081; color: white; box-shadow: 0 0 15px rgba(255, 64, 129, 0.4); }
+        button:disabled { background: #222; color: #555; cursor: not-allowed; }
+        .status-container { margin-top: 1.5rem; font-size: 0.9rem; }
+        #status { color: #888; }
+        .label { font-size: 0.7rem; text-transform: uppercase; color: #555; letter-spacing: 1px; margin-top: 10px; }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h2>カラオケモニター</h2>
-    <p class="warning">⚠️ 必ずイヤホンを使用してください</p>
+    <h2>Voice Monitor</h2>
+    <p class="warning">⚠️ 音のループを防ぐため<br>有線イヤホンを推奨します</p>
     
+    <div class="label">Step 1</div>
     <button id="startBtn" class="start-btn">マイクを開始する</button>
+    
+    <div class="label">Step 2 (Effect)</div>
     <button id="reverbBtn" class="reverb-btn" disabled>リバーブ: OFF</button>
     
-    <p id="status" class="status">停止中</p>
+    <div class="status-container">
+        <span id="status">準備完了</span>
+    </div>
 </div>
 
 <script>
     let audioContext;
     let microphone;
-    let reverbNode; // リバーブ（擬似）の役割をするノード
+    let noiseFilter; // 雑音カット用
+    let reverbNode;
     let isReverbOn = false;
 
     const startBtn = document.getElementById('startBtn');
     const reverbBtn = document.getElementById('reverbBtn');
     const statusText = document.getElementById('status');
 
-    // リバーブ（擬似）を作成する関数
+    // リバーブ（擬似残響）を作成する関数
     function createReverb(context) {
-        // シンプルなフィードバック・ディレイで残響を作る
         const delay = context.createDelay();
-        delay.delayTime.value = 0.04; // 40msの遅延（リバーブ感）
+        delay.delayTime.value = 0.05; // 50msの遅延
 
         const feedback = context.createGain();
         feedback.gain.value = 0.4; // 響きの長さ
 
         const filter = context.createBiquadFilter();
-        filter.frequency.value = 2000; // 高音を少し削って自然な響きに
+        filter.frequency.value = 1500; // 高音を抑えてマイルドに
 
-        // ループ構造を作る
         delay.connect(feedback);
         feedback.connect(filter);
         filter.connect(delay);
@@ -61,48 +70,59 @@
         if (audioContext) return;
 
         try {
+            // マイク設定：ブラウザの「おせっかい」を極限までオフにする
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
-                    echoCancellation: true,
-                    noiseSuppression: false,
-                    autoGainControl: true
+                    echoCancellation: true,   // ハウリング防止のみON
+                    noiseSuppression: false,  // 「あー」が途切れる原因なのでOFF
+                    autoGainControl: false,   // 勝手に音量が変わるのを防ぐためOFF
+                    latency: 0                // 低遅延モード
                 }
             });
 
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
             microphone = audioContext.createMediaStreamSource(stream);
 
-            // リバーブユニットの作成
+            // 【雑音対策】150Hz以下の「ゴー」という低いノイズをカット
+            noiseFilter = audioContext.createBiquadFilter();
+            noiseFilter.type = "highpass"; 
+            noiseFilter.frequency.value = 150; 
+
+            // リバーブユニットの準備
             reverbNode = createReverb(audioContext);
 
-            // マイク音をそのまま出力へ（ドライ音）
-            microphone.connect(audioContext.destination);
+            // 接続の流れ: マイク -> 雑音フィルタ -> 出力
+            microphone.connect(noiseFilter);
+            noiseFilter.connect(audioContext.destination);
 
-            statusText.innerText = "🎤 モニター中";
+            statusText.innerText = "🎤 モニター中（ノイズフィルタ有効）";
+            statusText.style.color = "#4caf50";
             startBtn.disabled = true;
             startBtn.innerText = "接続済み";
-            reverbBtn.disabled = false; // リバーブボタンを有効化
+            reverbBtn.disabled = false;
 
         } catch (err) {
-            statusText.innerText = "エラー: マイクを許可してください";
+            console.error(err);
+            statusText.innerText = "エラー: マイク許可が必要です";
+            statusText.style.color = "#f44336";
         }
     };
 
     reverbBtn.onclick = () => {
         if (!isReverbOn) {
-            // リバーブをONにする：マイクをリバーブユニットに繋ぎ、それを主力へ
-            microphone.connect(reverbNode);
+            // リバーブを回路に組み込む
+            noiseFilter.connect(reverbNode);
             reverbNode.connect(audioContext.destination);
             
             reverbBtn.innerText = "リバーブ: ON";
-            reverbBtn.classList.add('reverb-on');
+            reverbBtn.classList.add('active');
             isReverbOn = true;
         } else {
-            // リバーブをOFFにする：リバーブユニットへの接続を切る
+            // リバーブを切り離す
             reverbNode.disconnect();
             
             reverbBtn.innerText = "リバーブ: OFF";
-            reverbBtn.classList.remove('reverb-on');
+            reverbBtn.classList.remove('active');
             isReverbOn = false;
         }
     };

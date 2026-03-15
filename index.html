@@ -137,7 +137,7 @@
                     isEmergencyStopped = true;
                     masterGain.gain.setTargetAtTime(0, audioContext.currentTime, 0.01);
                     mainCard.classList.add('danger');
-                    statusText.innerText = "爆音検知：停止しました";
+                    statusText.innerText = "ハウリング検知：停止しました";
                 }
                 requestAnimationFrame(checkHowling);
             };

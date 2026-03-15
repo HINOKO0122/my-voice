@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Voice Monitor & Recorder</title>
+    <title>Voice Monitor</title>
     <style>
         body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #000; color: #0f0; margin: 0; }
         .card { border: 2px solid #0f0; padding: 2rem; border-radius: 10px; text-align: center; width: 320px; box-shadow: 0 0 20px #0f0; }
@@ -12,22 +12,23 @@
         button:disabled { border-color: #050; color: #050; cursor: not-allowed; }
         .rec-active { border-color: #f00; color: #f00; box-shadow: 0 0 10px #f00; }
         .info { font-size: 0.7rem; margin-top: 10px; color: #888; text-align: left; line-height: 1.5; }
-        #status { margin-top: 15px; font-weight: bold; min-height: 1.2em; }
+        #status { margin-top: 15px; font-weight: bold; }
     </style>
 </head>
 <body>
 
 <div class="card">
     <h2>Voice Monitor</h2>
-    <p style="font-size: 0.8rem;">※必ずイヤホンを使用してください</p>
+    <p style="font-size: 0.7rem; color: #aaa;">必ずイヤホンを使用してください</p>
     
-    <button id="startBtn">1. 開始</button>
+    <button id="startBtn">1. モニター開始</button>
     <button id="reverbBtn" disabled>2. お風呂場モード: OFF</button>
     <button id="recordBtn" disabled>3. 録音スタート</button>
     
     <div class="info">
-        ・Low Latency Mode: ON<br>
-        ・All Auto Process: OFF
+        ・Low-cut (150Hz): ON<br>
+        ・High-cut (7kHz): ON<br>
+        ・Raw Input Mode: ON
     </div>
     <p id="status">Ready</p>
 </div>
@@ -35,11 +36,10 @@
 <script>
     let audioContext;
     let microphone;
-    let noiseFilter;
+    let lowCut; 
+    let highCut;
     let reverbNode;
     let isReverbOn = false;
-
-    // 録音用変数
     let mediaRecorder;
     let audioChunks = [];
     let isRecording = false;
@@ -67,46 +67,45 @@
                     echoCancellation: false, 
                     noiseSuppression: false,
                     autoGainControl: false,
-                    latency: 0,
-                    sampleRate: 48000
+                    latency: 0
                 }
             });
 
             audioContext = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 0 });
             microphone = audioContext.createMediaStreamSource(stream);
 
-            noiseFilter = audioContext.createBiquadFilter();
-            noiseFilter.type = "highpass";
-            noiseFilter.frequency.value = 100;
+            // 【対策1】低い「ブーン」をカット
+            lowCut = audioContext.createBiquadFilter();
+            lowCut.type = "highpass";
+            lowCut.frequency.value = 150; 
+
+            // 【対策2】高い「サー」をカット
+            highCut = audioContext.createBiquadFilter();
+            highCut.type = "lowpass";
+            highCut.frequency.value = 7000; 
 
             reverbNode = createReverb(audioContext);
 
-            // モニター出力への接続
-            microphone.connect(noiseFilter);
-            noiseFilter.connect(audioContext.destination);
+            // 接続: マイク -> 低音カット -> 高音カット -> 出力
+            microphone.connect(lowCut);
+            lowCut.connect(highCut);
+            highCut.connect(audioContext.destination);
 
-            // --- 録音の準備 ---
-            // フィルターを通した後の音（noiseFilter）を録音するように設定
+            // 録音設定
             const destination = audioContext.createMediaStreamDestination();
-            noiseFilter.connect(destination);
-            
-            // リバーブがONのときも録音されるよう、リバーブの出口も録音先に繋ぐ
+            highCut.connect(destination);
             reverbNode.connect(destination);
-
             mediaRecorder = new MediaRecorder(destination.stream);
             
-            mediaRecorder.ondataavailable = (event) => {
-                audioChunks.push(event.data);
-            };
-
+            mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
             mediaRecorder.onstop = () => {
-                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
-                const audioUrl = URL.createObjectURL(audioBlob);
-                const link = document.createElement('a');
-                link.href = audioUrl;
-                link.download = `recording_${new Date().getTime()}.wav`;
-                link.click();
-                audioChunks = []; // 次回のためにリセット
+                const blob = new Blob(audioChunks, { type: 'audio/wav' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `voice_${Date.now()}.wav`;
+                a.click();
+                audioChunks = [];
             };
 
             statusText.innerText = "RUNNING";
@@ -121,15 +120,13 @@
 
     reverbBtn.onclick = () => {
         if (!isReverbOn) {
-            noiseFilter.connect(reverbNode);
+            highCut.connect(reverbNode);
             reverbNode.connect(audioContext.destination);
             reverbBtn.innerText = "お風呂場モード: ON";
-            reverbBtn.style.color = "#fff";
             isReverbOn = true;
         } else {
-            reverbNode.disconnect(reverbNode); // リバーブだけ切断
+            reverbNode.disconnect();
             reverbBtn.innerText = "お風呂場モード: OFF";
-            reverbBtn.style.color = "#0f0";
             isReverbOn = false;
         }
     };
@@ -138,17 +135,15 @@
         if (!isRecording) {
             mediaRecorder.start();
             isRecording = true;
-            recordBtn.innerText = "録音停止 (保存)";
+            recordBtn.innerText = "停止 & 保存";
             recordBtn.classList.add('rec-active');
-            statusText.innerText = "● RECORDING...";
-            statusText.style.color = "#f00";
+            statusText.innerText = "RECORDING...";
         } else {
             mediaRecorder.stop();
             isRecording = false;
             recordBtn.innerText = "録音スタート";
             recordBtn.classList.remove('rec-active');
-            statusText.innerText = "SAVED!";
-            statusText.style.color = "#0f0";
+            statusText.innerText = "SAVED";
         }
     };
 </script>

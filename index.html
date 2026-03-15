@@ -6,108 +6,49 @@
     <title>Voice Monitor</title>
     <style>
         body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100vh; background: #000; color: #0f0; margin: 0; }
-        .card { border: 2px solid #0f0; padding: 2rem; border-radius: 10px; text-align: center; width: 320px; box-shadow: 0 0 20px #0f0; }
+        .card { border: 2px solid #0f0; padding: 2rem; border-radius: 10px; text-align: center; width: 320px; box-shadow: 0 0 20px #0f0; transition: 0.3s; }
         button { width: 100%; padding: 12px; margin: 8px 0; font-size: 1rem; cursor: pointer; border: 1px solid #0f0; background: transparent; color: #0f0; font-weight: bold; border-radius: 5px; }
         button:hover:not(:disabled) { background: #0f0; color: #000; }
         button:disabled { border-color: #050; color: #050; cursor: not-allowed; }
-        #status { margin-top: 15px; font-weight: bold; color: #ff0; }
-        .danger { color: #f00 !important; border-color: #f00 !important; box-shadow: 0 0 30px #f00 !important; }
+        .active { background: #0f0 !important; color: #000 !important; }
+        .danger { border-color: #f00 !important; color: #f00 !important; box-shadow: 0 0 30px #f00 !important; }
+        #status { margin-top: 15px; font-weight: bold; min-height: 1.2em; }
+        .info { font-size: 0.7rem; color: #888; margin-top: 10px; text-align: left; }
     </style>
 </head>
 <body>
 
 <div id="mainCard" class="card">
     <h2>Voice Monitor</h2>
-    <p style="font-size: 0.7rem;">Voice Monitor</p>
+    <p style="font-size: 0.7rem;">必ずイヤホン/ヘッドフォンを使用してください</p>
     
     <button id="startBtn">1. モニター開始</button>
     <button id="reverbBtn" disabled>2. お風呂場モード: OFF</button>
     <button id="recordBtn" disabled>3. 録音スタート</button>
     
-    <p id="status">必ずイヤホンかヘッドフォンを使用してください</p>
+    <p id="status">Ready</p>
+    <div class="info">
+        ・マイクの許可が必要です<br>
+        ・ハウリング検知で自動停止します
+    </div>
 </div>
 
 <script>
     let audioContext;
-    let microphone, lowCut, highCut, reverbNode, masterGain;
-    let analyser;
+    let microphone, lowCut, highCut, reverbNode, masterGain, dryGain, reverbGain;
+    let analyser, mediaRecorder;
+    let audioChunks = [];
     let isReverbOn = false;
+    let isRecording = false;
     let isEmergencyStopped = false;
 
     const startBtn = document.getElementById('startBtn');
+    const reverbBtn = document.getElementById('reverbBtn');
+    const recordBtn = document.getElementById('recordBtn');
     const statusText = document.getElementById('status');
     const mainCard = document.getElementById('mainCard');
 
-    startBtn.onclick = async () => {
-        if (audioContext) return;
-        try {
-            const stream = await navigator.mediaDevices.getUserMedia({
-                audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-            });
-
-            audioContext = new AudioContext();
-            microphone = audioContext.createMediaStreamSource(stream);
-
-            // 安全のためのマスターボリューム
-            masterGain = audioContext.createGain();
-            
-            // ハウリング検知用アナライザー
-            analyser = audioContext.createAnalyser();
-            analyser.fftSize = 256;
-            const dataArray = new Float32Array(analyser.frequencyBinCount);
-
-            // フィルター類
-            lowCut = audioContext.createBiquadFilter();
-            lowCut.type = "highpass"; lowCut.frequency.value = 150;
-            highCut = audioContext.createBiquadFilter();
-            highCut.type = "lowpass"; highCut.frequency.value = 7000;
-            
-            reverbNode = createReverb(audioContext);
-
-            // 接続: マイク -> フィルター -> アナライザー -> マスター音量 -> 出力
-            microphone.connect(lowCut);
-            lowCut.connect(highCut);
-            highCut.connect(analyser);
-            analyser.connect(masterGain);
-            masterGain.connect(audioContext.destination);
-
-            statusText.innerText = "監視中...";
-            startBtn.disabled = true;
-            document.getElementById('reverbBtn').disabled = false;
-            document.getElementById('recordBtn').disabled = false;
-
-            // ハウリング監視ループ
-            const checkHowling = () => {
-                if (isEmergencyStopped) return;
-                analyser.getFloatTimeDomainData(dataArray);
-                
-                let peak = 0;
-                for (let i = 0; i < dataArray.length; i++) {
-                    const s = Math.abs(dataArray[i]);
-                    if (s > peak) peak = s;
-                }
-
-                // 音量が 0.95 (最大値に近い) を超えたら緊急停止
-                if (peak > 0.95) {
-                    stopEverything("ハウリングを検知して停止しました！");
-                }
-                requestAnimationFrame(checkHowling);
-            };
-            checkHowling();
-
-        } catch (err) {
-            statusText.innerText = "エラー: " + err.name;
-        }
-    };
-
-    function stopEverything(msg) {
-        isEmergencyStopped = true;
-        masterGain.gain.setTargetAtTime(0, audioContext.currentTime, 0.01); // 即座にミュート
-        mainCard.classList.add('danger');
-        statusText.innerText = msg;
-        statusText.style.color = "#f00";
-    }
-
+    // リバーブユニット作成
     function createReverb(context) {
         const delay = context.createDelay();
         delay.delayTime.value = 0.04;
@@ -118,7 +59,154 @@
         return delay;
     }
 
-    // (リバーブと録音のロジックは前回同様ですが、masterGainに接続するように調整してください)
+    startBtn.onclick = async () => {
+        if (audioContext) return;
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0 }
+            });
+
+            audioContext = new AudioContext({ latencyHint: 0 });
+            microphone = audioContext.createMediaStreamSource(stream);
+
+            // 1. フィルター層
+            lowCut = audioContext.createBiquadFilter();
+            lowCut.type = "highpass"; lowCut.frequency.value = 150;
+            highCut = audioContext.createBiquadFilter();
+            highCut.type = "lowpass"; highCut.frequency.value = 7000;
+
+            // 2. 経路分岐用のGain
+            dryGain = audioContext.createGain(); // 生音用
+            reverbGain = audioContext.createGain(); // リバーブ音用
+            reverbGain.gain.value = 0; // 初期はOFF
+
+            // 3. 安全装置・出力層
+            masterGain = audioContext.createGain();
+            analyser = audioContext.createAnalyser();
+            analyser.fftSize = 256;
+
+            reverbNode = createReverb(audioContext);
+
+            // --- 接続図 ---
+            // マイク -> フィルター -> 分岐(Dry / Reverb)
+            microphone.connect(lowCut);
+            lowCut.connect(highCut);
+            
+            // 生音の道
+            highCut.connect(dryGain);
+            dryGain.connect(masterGain);
+
+            // リバーブの道
+            highCut.connect(reverbNode);
+            reverbNode.connect(reverbGain);
+            reverbGain.connect(masterGain);
+
+            // 出力直前で監視
+            masterGain.connect(analyser);
+            analyser.connect(audioContext.destination);
+
+            // 録音設定
+            const destination = audioContext.createMediaStreamDestination();
+            masterGain.connect(destination);
+            mediaRecorder = new MediaRecorder(destination.stream);
+            mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
+            mediaRecorder.onstop = async () => {
+                statusText.innerText = "音量最適化中...";
+                const blob = new Blob(audioChunks, { type: 'audio/wav' });
+                // (前回のnormalizeAudioとbufferToWav関数が必要です)
+                const normalizedBuffer = await normalizeAudio(blob);
+                const finalBlob = bufferToWav(normalizedBuffer);
+                const url = URL.createObjectURL(finalBlob);
+                const a = document.createElement('a'); a.href = url;
+                a.download = `voice_${Date.now()}.wav`; a.click();
+                audioChunks = [];
+                statusText.innerText = "保存完了";
+            };
+
+            // ハウリング監視ループ
+            const dataArray = new Float32Array(analyser.frequencyBinCount);
+            const checkHowling = () => {
+                if (isEmergencyStopped) return;
+                analyser.getFloatTimeDomainData(dataArray);
+                let peak = 0;
+                for (let i = 0; i < dataArray.length; i++) {
+                    const s = Math.abs(dataArray[i]);
+                    if (s > peak) peak = s;
+                }
+                if (peak > 0.90) { // 少し厳しめに設定
+                    isEmergencyStopped = true;
+                    masterGain.gain.setTargetAtTime(0, audioContext.currentTime, 0.01);
+                    mainCard.classList.add('danger');
+                    statusText.innerText = "爆音検知：停止しました";
+                }
+                requestAnimationFrame(checkHowling);
+            };
+            checkHowling();
+
+            statusText.innerText = "モニター中";
+            startBtn.disabled = true;
+            reverbBtn.disabled = false;
+            recordBtn.disabled = false;
+
+        } catch (err) {
+            statusText.innerText = "エラー: " + err.name;
+        }
+    };
+
+    reverbBtn.onclick = () => {
+        if (!isReverbOn) {
+            reverbGain.gain.setTargetAtTime(1, audioContext.currentTime, 0.1);
+            reverbBtn.innerText = "お風呂場モード: ON";
+            reverbBtn.classList.add('active');
+            isReverbOn = true;
+        } else {
+            reverbGain.gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
+            reverbBtn.innerText = "お風呂場モード: OFF";
+            reverbBtn.classList.remove('active');
+            isReverbOn = false;
+        }
+    };
+
+    recordBtn.onclick = () => {
+        if (!isRecording) {
+            mediaRecorder.start();
+            isRecording = true;
+            recordBtn.innerText = "停止 & 保存";
+            statusText.innerText = "● 録音中...";
+        } else {
+            mediaRecorder.stop();
+            isRecording = false;
+            recordBtn.innerText = "録音スタート";
+        }
+    };
+
+    // --- 録音補正用の補助関数 (必須) ---
+    async function normalizeAudio(blob) {
+        const arrayBuffer = await blob.arrayBuffer();
+        const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+        const rawData = audioBuffer.getChannelData(0);
+        let maxVal = 0;
+        for (let i = 0; i < rawData.length; i++) {
+            const abs = Math.abs(rawData[i]);
+            if (abs > maxVal) maxVal = abs;
+        }
+        const gain = maxVal > 0 ? 0.95 / maxVal : 1;
+        for (let i = 0; i < rawData.length; i++) { rawData[i] *= gain; }
+        return audioBuffer;
+    }
+
+    function bufferToWav(abuffer) {
+        let numOfChan = abuffer.numberOfChannels, length = abuffer.length * numOfChan * 2 + 44, buffer = new ArrayBuffer(length), view = new DataView(buffer), pos = 0;
+        const setU32 = (d) => { view.setUint32(pos, d, true); pos += 4; };
+        const setU16 = (d) => { view.setUint16(pos, d, true); pos += 2; };
+        setU32(0x46464952); setU32(length - 8); setU32(0x45564157); setU32(0x20746d66); setU32(16); setU16(1); setU16(numOfChan); setU32(abuffer.sampleRate); setU32(abuffer.sampleRate * 2 * numOfChan); setU16(numOfChan * 2); setU16(16); setU32(0x61746164); setU32(length - pos - 4);
+        let chan = abuffer.getChannelData(0);
+        for (let i = 0; i < abuffer.length; i++) {
+            let s = Math.max(-1, Math.min(1, chan[i]));
+            view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+        }
+        return new Blob([view], {type: 'audio/wav'});
+    }
 </script>
 </body>
 </html>

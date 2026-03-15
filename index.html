@@ -3,66 +3,109 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Voice Monitor - ハウリング抑制機能付き</title>
+    <title>Karaoke Monitor - Reverb Edition</title>
     <style>
-        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #f0f2f5; }
-        .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; }
-        button { padding: 10px 20px; font-size: 1.2rem; cursor: pointer; border: none; border-radius: 5px; background: #007bff; color: white; transition: 0.3s; }
-        button:hover { background: #0056b3; }
-        .status { margin-top: 1rem; color: #666; }
-        .warning { color: #d9534f; font-weight: bold; margin-bottom: 1rem; }
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #1a1a1a; color: white; }
+        .card { background: #2d2d2d; padding: 2rem; border-radius: 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); text-align: center; width: 300px; }
+        button { width: 100%; padding: 12px; margin: 10px 0; font-size: 1rem; cursor: pointer; border: none; border-radius: 8px; font-weight: bold; transition: 0.2s; }
+        .start-btn { background: #007bff; color: white; }
+        .reverb-btn { background: #6c757d; color: white; }
+        .reverb-on { background: #e91e63; } /* リバーブ中の色 */
+        .status { margin-top: 1rem; font-size: 0.9rem; color: #aaa; }
+        .warning { color: #ffc107; font-size: 0.8rem; margin-bottom: 1rem; }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h2>ボイスモニター</h2>
-    <p class="warning">⚠️ ハウリング防止のため、<br>必ずイヤホンを装着してください。</p>
-    <button id="startBtn">マイク入力を開始</button>
+    <h2>カラオケモニター</h2>
+    <p class="warning">⚠️ 必ずイヤホンを使用してください</p>
+    
+    <button id="startBtn" class="start-btn">マイクを開始する</button>
+    <button id="reverbBtn" class="reverb-btn" disabled>リバーブ: OFF</button>
+    
     <p id="status" class="status">停止中</p>
 </div>
 
 <script>
-let audioContext;
-let microphone;
+    let audioContext;
+    let microphone;
+    let reverbNode; // リバーブ（擬似）の役割をするノード
+    let isReverbOn = false;
 
-const startBtn = document.getElementById('startBtn');
-const statusText = document.getElementById('status');
+    const startBtn = document.getElementById('startBtn');
+    const reverbBtn = document.getElementById('reverbBtn');
+    const statusText = document.getElementById('status');
 
-startBtn.onclick = async () => {
-    if (audioContext) return;
+    // リバーブ（擬似）を作成する関数
+    function createReverb(context) {
+        // シンプルなフィードバック・ディレイで残響を作る
+        const delay = context.createDelay();
+        delay.delayTime.value = 0.04; // 40msの遅延（リバーブ感）
 
-    try {
-        // 途切れ対策1: サンプリングレートを固定し、レイテンシ（遅延）の設定を調整
-        const stream = await navigator.mediaDevices.getUserMedia({
-            audio: {
-                echoCancellation: true,  // ハウリング防止
-                noiseSuppression: false, // 途切れの原因になりやすいのでOFFにしてみる
-                autoGainControl: true,
-                latency: 0.02            // わずかなバッファを持たせて安定させる
-            }
-        });
+        const feedback = context.createGain();
+        feedback.gain.value = 0.4; // 響きの長さ
 
-        // 途切れ対策2: LatencyHintを 'interactive' (低遅延重視) に設定
-        audioContext = new (window.AudioContext || window.webkitAudioContext)({
-            latencyHint: 'interactive',
-            sampleRate: 44100 // 標準的な音質に固定
-        });
+        const filter = context.createBiquadFilter();
+        filter.frequency.value = 2000; // 高音を少し削って自然な響きに
 
-        microphone = audioContext.createMediaStreamSource(stream);
-        
-        // 出力へ接続
-        microphone.connect(audioContext.destination);
+        // ループ構造を作る
+        delay.connect(feedback);
+        feedback.connect(filter);
+        filter.connect(delay);
 
-        statusText.innerText = "🎤 モニター中";
-        startBtn.disabled = true;
-        startBtn.style.background = "#28a745";
-
-    } catch (err) {
-        console.error(err);
-        statusText.innerText = "エラーが発生しました。";
+        return delay;
     }
-};
+
+    startBtn.onclick = async () => {
+        if (audioContext) return;
+
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: false,
+                    autoGainControl: true
+                }
+            });
+
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 'interactive' });
+            microphone = audioContext.createMediaStreamSource(stream);
+
+            // リバーブユニットの作成
+            reverbNode = createReverb(audioContext);
+
+            // マイク音をそのまま出力へ（ドライ音）
+            microphone.connect(audioContext.destination);
+
+            statusText.innerText = "🎤 モニター中";
+            startBtn.disabled = true;
+            startBtn.innerText = "接続済み";
+            reverbBtn.disabled = false; // リバーブボタンを有効化
+
+        } catch (err) {
+            statusText.innerText = "エラー: マイクを許可してください";
+        }
+    };
+
+    reverbBtn.onclick = () => {
+        if (!isReverbOn) {
+            // リバーブをONにする：マイクをリバーブユニットに繋ぎ、それを主力へ
+            microphone.connect(reverbNode);
+            reverbNode.connect(audioContext.destination);
+            
+            reverbBtn.innerText = "リバーブ: ON";
+            reverbBtn.classList.add('reverb-on');
+            isReverbOn = true;
+        } else {
+            // リバーブをOFFにする：リバーブユニットへの接続を切る
+            reverbNode.disconnect();
+            
+            reverbBtn.innerText = "リバーブ: OFF";
+            reverbBtn.classList.remove('reverb-on');
+            isReverbOn = false;
+        }
+    };
 </script>
 
 </body>

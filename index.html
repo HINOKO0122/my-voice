@@ -1,5 +1,28 @@
-// ... (HTML部分は同じでOK、scriptタグの中身を以下に差し替え)
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Voice Monitor - ハウリング抑制機能付き</title>
+    <style>
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #f0f2f5; }
+        .card { background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); text-align: center; }
+        button { padding: 10px 20px; font-size: 1.2rem; cursor: pointer; border: none; border-radius: 5px; background: #007bff; color: white; transition: 0.3s; }
+        button:hover { background: #0056b3; }
+        .status { margin-top: 1rem; color: #666; }
+        .warning { color: #d9534f; font-weight: bold; margin-bottom: 1rem; }
+    </style>
+</head>
+<body>
 
+<div class="card">
+    <h2>ボイスモニター</h2>
+    <p class="warning">⚠️ ハウリング防止のため、<br>必ずイヤホンを装着してください。</p>
+    <button id="startBtn">マイク入力を開始</button>
+    <p id="status" class="status">停止中</p>
+</div>
+
+<script>
 let audioContext;
 let microphone;
 
@@ -40,3 +63,7 @@ startBtn.onclick = async () => {
         statusText.innerText = "エラーが発生しました。";
     }
 };
+</script>
+
+</body>
+</html>

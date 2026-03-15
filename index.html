@@ -3,31 +3,33 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ultra Low Latency Monitor</title>
+    <title>Voice Monitor & Recorder</title>
     <style>
         body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #000; color: #0f0; margin: 0; }
-        .card { border: 2px solid #0f0; padding: 2rem; border-radius: 10px; text-align: center; width: 300px; box-shadow: 0 0 20px #0f0; }
-        button { width: 100%; padding: 15px; margin: 10px 0; font-size: 1rem; cursor: pointer; border: 1px solid #0f0; background: transparent; color: #0f0; font-weight: bold; }
-        button:hover { background: #0f0; color: #000; }
-        button:disabled { border-color: #050; color: #050; }
-        .info { font-size: 0.8rem; margin-top: 10px; color: #888; text-align: left; }
+        .card { border: 2px solid #0f0; padding: 2rem; border-radius: 10px; text-align: center; width: 320px; box-shadow: 0 0 20px #0f0; }
+        button { width: 100%; padding: 12px; margin: 8px 0; font-size: 1rem; cursor: pointer; border: 1px solid #0f0; background: transparent; color: #0f0; font-weight: bold; border-radius: 5px; }
+        button:hover:not(:disabled) { background: #0f0; color: #000; }
+        button:disabled { border-color: #050; color: #050; cursor: not-allowed; }
+        .rec-active { border-color: #f00; color: #f00; box-shadow: 0 0 10px #f00; }
+        .info { font-size: 0.7rem; margin-top: 10px; color: #888; text-align: left; line-height: 1.5; }
+        #status { margin-top: 15px; font-weight: bold; min-height: 1.2em; }
     </style>
 </head>
 <body>
 
 <div class="card">
     <h2>Voice Monitor</h2>
-    <p style="font-size: 0.8rem;">※必ずイヤホンかヘッドフォンを使用してください</p>
+    <p style="font-size: 0.8rem;">※必ずイヤホンを使用してください</p>
     
-    <button id="startBtn">START</button>
-    <button id="reverbBtn" disabled>お風呂場モード: OFF</button>
+    <button id="startBtn">1. 開始</button>
+    <button id="reverbBtn" disabled>2. お風呂場モード: OFF</button>
+    <button id="recordBtn" disabled>3. 録音スタート</button>
     
     <div class="info">
-        ・Echo Cancellation: OFF<br>
-        ・Noise Suppress: OFF<br>
-        ・Auto Gain: OFF
+        ・Low Latency Mode: ON<br>
+        ・All Auto Process: OFF
     </div>
-    <p id="status" style="margin-top:15px;">Ready</p>
+    <p id="status">Ready</p>
 </div>
 
 <script>
@@ -37,8 +39,14 @@
     let reverbNode;
     let isReverbOn = false;
 
+    // 録音用変数
+    let mediaRecorder;
+    let audioChunks = [];
+    let isRecording = false;
+
     const startBtn = document.getElementById('startBtn');
     const reverbBtn = document.getElementById('reverbBtn');
+    const recordBtn = document.getElementById('recordBtn');
     const statusText = document.getElementById('status');
 
     function createReverb(context) {
@@ -53,42 +61,58 @@
 
     startBtn.onclick = async () => {
         if (audioContext) return;
-
         try {
-            // 【重要】echoCancellationもあえてOFFにします
-            // これにより「音の大小」は消えますが、スピーカーだと即ハウリングします
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     echoCancellation: false, 
                     noiseSuppression: false,
                     autoGainControl: false,
-                    // 遅延を減らすためのヒント
                     latency: 0,
                     sampleRate: 48000
                 }
             });
 
-            // AudioContextのバッファサイズを最小にする（interactive指定）
-            audioContext = new (window.AudioContext || window.webkitAudioContext)({
-                latencyHint: 0, // 最速設定
-            });
-
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({ latencyHint: 0 });
             microphone = audioContext.createMediaStreamSource(stream);
 
-            // 低音カットフィルター（これだけは雑音対策に残す）
             noiseFilter = audioContext.createBiquadFilter();
             noiseFilter.type = "highpass";
             noiseFilter.frequency.value = 100;
 
             reverbNode = createReverb(audioContext);
 
-            // 直結して遅延を最小化
+            // モニター出力への接続
             microphone.connect(noiseFilter);
             noiseFilter.connect(audioContext.destination);
 
-            statusText.innerText = "RUNNING (LOW LATENCY)";
+            // --- 録音の準備 ---
+            // フィルターを通した後の音（noiseFilter）を録音するように設定
+            const destination = audioContext.createMediaStreamDestination();
+            noiseFilter.connect(destination);
+            
+            // リバーブがONのときも録音されるよう、リバーブの出口も録音先に繋ぐ
+            reverbNode.connect(destination);
+
+            mediaRecorder = new MediaRecorder(destination.stream);
+            
+            mediaRecorder.ondataavailable = (event) => {
+                audioChunks.push(event.data);
+            };
+
+            mediaRecorder.onstop = () => {
+                const audioBlob = new Blob(audioChunks, { type: 'audio/wav' });
+                const audioUrl = URL.createObjectURL(audioBlob);
+                const link = document.createElement('a');
+                link.href = audioUrl;
+                link.download = `recording_${new Date().getTime()}.wav`;
+                link.click();
+                audioChunks = []; // 次回のためにリセット
+            };
+
+            statusText.innerText = "RUNNING";
             startBtn.disabled = true;
             reverbBtn.disabled = false;
+            recordBtn.disabled = false;
 
         } catch (err) {
             statusText.innerText = "Error: " + err;
@@ -99,12 +123,32 @@
         if (!isReverbOn) {
             noiseFilter.connect(reverbNode);
             reverbNode.connect(audioContext.destination);
-            reverbBtn.innerText = "REVERB: ON";
+            reverbBtn.innerText = "お風呂場モード: ON";
+            reverbBtn.style.color = "#fff";
             isReverbOn = true;
         } else {
-            reverbNode.disconnect();
-            reverbBtn.innerText = "REVERB: OFF";
+            reverbNode.disconnect(reverbNode); // リバーブだけ切断
+            reverbBtn.innerText = "お風呂場モード: OFF";
+            reverbBtn.style.color = "#0f0";
             isReverbOn = false;
+        }
+    };
+
+    recordBtn.onclick = () => {
+        if (!isRecording) {
+            mediaRecorder.start();
+            isRecording = true;
+            recordBtn.innerText = "録音停止 (保存)";
+            recordBtn.classList.add('rec-active');
+            statusText.innerText = "● RECORDING...";
+            statusText.style.color = "#f00";
+        } else {
+            mediaRecorder.stop();
+            isRecording = false;
+            recordBtn.innerText = "録音スタート";
+            recordBtn.classList.remove('rec-active');
+            statusText.innerText = "SAVED!";
+            statusText.style.color = "#0f0";
         }
     };
 </script>

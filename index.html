@@ -3,44 +3,37 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>High-Quality Voice Monitor</title>
+    <title>Ultra Low Latency Monitor</title>
     <style>
-        body { font-family: 'Helvetica Neue', Arial, sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #121212; color: #e0e0e0; margin: 0; }
-        .card { background: #1e1e1e; padding: 2.5rem; border-radius: 20px; box-shadow: 0 15px 35px rgba(0,0,0,0.5); text-align: center; width: 320px; border: 1px solid #333; }
-        h2 { margin-bottom: 0.5rem; color: #fff; }
-        .warning { color: #ff9800; font-size: 0.85rem; margin-bottom: 1.5rem; line-height: 1.4; }
-        button { width: 100%; padding: 14px; margin: 8px 0; font-size: 1rem; cursor: pointer; border: none; border-radius: 10px; font-weight: bold; transition: all 0.2s ease; }
-        .start-btn { background: #007bff; color: white; }
-        .start-btn:hover { background: #0069d9; }
-        .reverb-btn { background: #444; color: #bbb; }
-        .reverb-btn.active { background: #ff4081; color: white; box-shadow: 0 0 15px rgba(255, 64, 129, 0.4); }
-        button:disabled { background: #222; color: #555; cursor: not-allowed; }
-        .status-container { margin-top: 1.5rem; font-size: 0.9rem; }
-        #status { color: #888; }
-        .label { font-size: 0.7rem; text-transform: uppercase; color: #555; letter-spacing: 1px; margin-top: 10px; }
+        body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; background: #000; color: #0f0; margin: 0; }
+        .card { border: 2px solid #0f0; padding: 2rem; border-radius: 10px; text-align: center; width: 300px; box-shadow: 0 0 20px #0f0; }
+        button { width: 100%; padding: 15px; margin: 10px 0; font-size: 1rem; cursor: pointer; border: 1px solid #0f0; background: transparent; color: #0f0; font-weight: bold; }
+        button:hover { background: #0f0; color: #000; }
+        button:disabled { border-color: #050; color: #050; }
+        .info { font-size: 0.8rem; margin-top: 10px; color: #888; text-align: left; }
     </style>
 </head>
 <body>
 
 <div class="card">
-    <h2>Voice Monitor</h2>
-    <p class="warning">⚠️ 音のループを防ぐため<br>有線イヤホンを推奨します</p>
+    <h2>Pro Monitor Mode</h2>
+    <p style="font-size: 0.8rem;">※自動加工をすべてOFFにしました</p>
     
-    <div class="label">Step 1</div>
-    <button id="startBtn" class="start-btn">マイクを開始する</button>
+    <button id="startBtn">START MONITORING</button>
+    <button id="reverbBtn" disabled>REVERB: OFF</button>
     
-    <div class="label">Step 2 (Effect)</div>
-    <button id="reverbBtn" class="reverb-btn" disabled>リバーブ: OFF</button>
-    
-    <div class="status-container">
-        <span id="status">準備完了</span>
+    <div class="info">
+        ・Echo Cancellation: OFF<br>
+        ・Noise Suppress: OFF<br>
+        ・Auto Gain: OFF
     </div>
+    <p id="status" style="margin-top:15px;">Ready</p>
 </div>
 
 <script>
     let audioContext;
     let microphone;
-    let noiseFilter; // 雑音カット用
+    let noiseFilter;
     let reverbNode;
     let isReverbOn = false;
 
@@ -48,21 +41,13 @@
     const reverbBtn = document.getElementById('reverbBtn');
     const statusText = document.getElementById('status');
 
-    // リバーブ（擬似残響）を作成する関数
     function createReverb(context) {
         const delay = context.createDelay();
-        delay.delayTime.value = 0.05; // 50msの遅延
-
+        delay.delayTime.value = 0.04;
         const feedback = context.createGain();
-        feedback.gain.value = 0.4; // 響きの長さ
-
-        const filter = context.createBiquadFilter();
-        filter.frequency.value = 1500; // 高音を抑えてマイルドに
-
+        feedback.gain.value = 0.35;
         delay.connect(feedback);
-        feedback.connect(filter);
-        filter.connect(delay);
-
+        feedback.connect(delay);
         return delay;
     }
 
@@ -70,59 +55,55 @@
         if (audioContext) return;
 
         try {
-            // マイク設定：ブラウザの「おせっかい」を極限までオフにする
+            // 【重要】echoCancellationもあえてOFFにします
+            // これにより「音の大小」は消えますが、スピーカーだと即ハウリングします
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
-                    echoCancellation: true,   // ハウリング防止のみON
-                    noiseSuppression: false,  // 「あー」が途切れる原因なのでOFF
-                    autoGainControl: false,   // 勝手に音量が変わるのを防ぐためOFF
-                    latency: 0                // 低遅延モード
+                    echoCancellation: false, 
+                    noiseSuppression: false,
+                    autoGainControl: false,
+                    // 遅延を減らすためのヒント
+                    latency: 0,
+                    sampleRate: 48000
                 }
             });
 
-            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+            // AudioContextのバッファサイズを最小にする（interactive指定）
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                latencyHint: 0, // 最速設定
+            });
+
             microphone = audioContext.createMediaStreamSource(stream);
 
-            // 【雑音対策】150Hz以下の「ゴー」という低いノイズをカット
+            // 低音カットフィルター（これだけは雑音対策に残す）
             noiseFilter = audioContext.createBiquadFilter();
-            noiseFilter.type = "highpass"; 
-            noiseFilter.frequency.value = 150; 
+            noiseFilter.type = "highpass";
+            noiseFilter.frequency.value = 100;
 
-            // リバーブユニットの準備
             reverbNode = createReverb(audioContext);
 
-            // 接続の流れ: マイク -> 雑音フィルタ -> 出力
+            // 直結して遅延を最小化
             microphone.connect(noiseFilter);
             noiseFilter.connect(audioContext.destination);
 
-            statusText.innerText = "🎤 モニター中（ノイズフィルタ有効）";
-            statusText.style.color = "#4caf50";
+            statusText.innerText = "RUNNING (LOW LATENCY)";
             startBtn.disabled = true;
-            startBtn.innerText = "接続済み";
             reverbBtn.disabled = false;
 
         } catch (err) {
-            console.error(err);
-            statusText.innerText = "エラー: マイク許可が必要です";
-            statusText.style.color = "#f44336";
+            statusText.innerText = "Error: " + err;
         }
     };
 
     reverbBtn.onclick = () => {
         if (!isReverbOn) {
-            // リバーブを回路に組み込む
             noiseFilter.connect(reverbNode);
             reverbNode.connect(audioContext.destination);
-            
-            reverbBtn.innerText = "リバーブ: ON";
-            reverbBtn.classList.add('active');
+            reverbBtn.innerText = "REVERB: ON";
             isReverbOn = true;
         } else {
-            // リバーブを切り離す
             reverbNode.disconnect();
-            
-            reverbBtn.innerText = "リバーブ: OFF";
-            reverbBtn.classList.remove('active');
+            reverbBtn.innerText = "REVERB: OFF";
             isReverbOn = false;
         }
     };

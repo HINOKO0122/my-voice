@@ -48,9 +48,8 @@
     const statusText = document.getElementById('status');
     const mainCard = document.getElementById('mainCard');
 
-    // リバーブユニット作成
     function createReverb(context) {
-        const delay = context.createDelay();
+        const delay = context.createDelay(0.1);
         delay.delayTime.value = 0.04;
         const feedback = context.createGain();
         feedback.gain.value = 0.35;
@@ -63,49 +62,56 @@
         if (audioContext) return;
         try {
             const stream = await navigator.mediaDevices.getUserMedia({
-                audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false, latency: 0 }
+                audio: { 
+                    echoCancellation: false, 
+                    noiseSuppression: false, 
+                    autoGainControl: false,
+                    // ブラウザ独自プロパティによる追加抑制
+                    googEchoCancellation: false,
+                    googAutoGainControl: false,
+                    googNoiseSuppression: false,
+                    googHighpassFilter: false,
+                    latency: 0 
+                }
             });
 
-            audioContext = new AudioContext({ latencyHint: 0 });
+            // 速度優先のContext設定
+            audioContext = new (window.AudioContext || window.webkitAudioContext)({
+                latencyHint: 0,
+                sampleRate: 44100 
+            });
+
             microphone = audioContext.createMediaStreamSource(stream);
 
-            // 1. フィルター層
             lowCut = audioContext.createBiquadFilter();
             lowCut.type = "highpass"; lowCut.frequency.value = 150;
             highCut = audioContext.createBiquadFilter();
             highCut.type = "lowpass"; highCut.frequency.value = 7000;
 
-            // 2. 経路分岐用のGain
-            dryGain = audioContext.createGain(); // 生音用
-            reverbGain = audioContext.createGain(); // リバーブ音用
-            reverbGain.gain.value = 0; // 初期はOFF
+            dryGain = audioContext.createGain();
+            reverbGain = audioContext.createGain();
+            reverbGain.gain.value = 0;
 
-            // 3. 安全装置・出力層
             masterGain = audioContext.createGain();
             analyser = audioContext.createAnalyser();
             analyser.fftSize = 256;
 
             reverbNode = createReverb(audioContext);
 
-            // --- 接続図 ---
-            // マイク -> フィルター -> 分岐(Dry / Reverb)
+            // 接続
             microphone.connect(lowCut);
             lowCut.connect(highCut);
             
-            // 生音の道
             highCut.connect(dryGain);
             dryGain.connect(masterGain);
 
-            // リバーブの道
             highCut.connect(reverbNode);
             reverbNode.connect(reverbGain);
             reverbGain.connect(masterGain);
 
-            // 出力直前で監視
             masterGain.connect(analyser);
             analyser.connect(audioContext.destination);
 
-            // 録音設定
             const destination = audioContext.createMediaStreamDestination();
             masterGain.connect(destination);
             mediaRecorder = new MediaRecorder(destination.stream);
@@ -113,7 +119,6 @@
             mediaRecorder.onstop = async () => {
                 statusText.innerText = "音量最適化中...";
                 const blob = new Blob(audioChunks, { type: 'audio/wav' });
-                // (前回のnormalizeAudioとbufferToWav関数が必要です)
                 const normalizedBuffer = await normalizeAudio(blob);
                 const finalBlob = bufferToWav(normalizedBuffer);
                 const url = URL.createObjectURL(finalBlob);
@@ -123,7 +128,6 @@
                 statusText.innerText = "保存完了";
             };
 
-            // ハウリング監視ループ
             const dataArray = new Float32Array(analyser.frequencyBinCount);
             const checkHowling = () => {
                 if (isEmergencyStopped) return;
@@ -133,7 +137,7 @@
                     const s = Math.abs(dataArray[i]);
                     if (s > peak) peak = s;
                 }
-                if (peak > 0.90) { // 少し厳しめに設定
+                if (peak > 0.90) {
                     isEmergencyStopped = true;
                     masterGain.gain.setTargetAtTime(0, audioContext.currentTime, 0.01);
                     mainCard.classList.add('danger');
@@ -155,12 +159,13 @@
 
     reverbBtn.onclick = () => {
         if (!isReverbOn) {
-            reverbGain.gain.setTargetAtTime(1, audioContext.currentTime, 0.1);
+            // 切替も速く
+            reverbGain.gain.setValueAtTime(1, audioContext.currentTime);
             reverbBtn.innerText = "お風呂場モード: ON";
             reverbBtn.classList.add('active');
             isReverbOn = true;
         } else {
-            reverbGain.gain.setTargetAtTime(0, audioContext.currentTime, 0.1);
+            reverbGain.gain.setValueAtTime(0, audioContext.currentTime);
             reverbBtn.innerText = "お風呂場モード: OFF";
             reverbBtn.classList.remove('active');
             isReverbOn = false;
@@ -180,7 +185,6 @@
         }
     };
 
-    // --- 録音補正用の補助関数 (必須) ---
     async function normalizeAudio(blob) {
         const arrayBuffer = await blob.arrayBuffer();
         const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);

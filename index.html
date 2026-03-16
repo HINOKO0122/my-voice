@@ -37,7 +37,7 @@
     let audioContext;
     let microphone, reverbNode, masterGain, dryGain, reverbGain;
     let analyser, scriptProcessor;
-    let audioData = []; // 生の音声データを蓄積
+    let audioData = [];
     let isReverbOn = false;
     let isRecording = false;
     let isEmergencyStopped = false;
@@ -56,6 +56,20 @@
         delay.connect(feedback);
         feedback.connect(delay);
         return delay;
+    }
+
+    // 遅延を表示し続けるループ
+    function monitorStatus() {
+        if (audioContext && !isEmergencyStopped) {
+            if (isRecording) {
+                statusText.innerText = "● 録音中...";
+            } else {
+                const lat = (audioContext.baseLatency || 0) + (audioContext.outputLatency || 0);
+                const latMs = (lat * 1000).toFixed(1);
+                statusText.innerText = `モニター中 (遅延: ${latMs}ms)`;
+            }
+        }
+        requestAnimationFrame(monitorStatus);
     }
 
     startBtn.onclick = async () => {
@@ -86,7 +100,7 @@
             masterGain.connect(analyser);
             masterGain.connect(audioContext.destination);
 
-            // 録音用プロセッサ（生データを直接取得）
+            // 録音用プロセッサ
             scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
             scriptProcessor.onaudioprocess = (e) => {
                 if (!isRecording) return;
@@ -115,8 +129,8 @@
                 requestAnimationFrame(checkHowling);
             };
             checkHowling();
+            monitorStatus(); // 遅延・ステータス表示ループ開始
 
-            statusText.innerText = "モニター中";
             startBtn.disabled = true;
             reverbBtn.disabled = false;
             recordBtn.disabled = false;
@@ -133,10 +147,9 @@
 
     recordBtn.onclick = () => {
         if (!isRecording) {
-            audioData = []; // クリア
+            audioData = []; 
             isRecording = true;
             recordBtn.innerText = "停止 & 保存";
-            statusText.innerText = "● 録音中...";
         } else {
             isRecording = false;
             saveWav();
@@ -145,9 +158,6 @@
     };
 
     function saveWav() {
-        statusText.innerText = "WAV作成中...";
-        
-        // 全データを一つの配列に統合
         const totalLength = audioData.reduce((acc, val) => acc + val.length, 0);
         const result = new Float32Array(totalLength);
         let offset = 0;
@@ -156,7 +166,6 @@
             offset += chunk.length;
         }
 
-        // WAV変換（軽量版）
         const buffer = new ArrayBuffer(44 + result.length * 2);
         const view = new DataView(buffer);
         const writeString = (off, s) => { for (let i=0; i<s.length; i++) view.setUint8(off+i, s.charCodeAt(i)); };
@@ -175,7 +184,6 @@
         writeString(36, 'data');
         view.setUint32(40, result.length * 2, true);
 
-        // 音声データの書き込み
         for (let i = 0; i < result.length; i++) {
             const s = Math.max(-1, Math.min(1, result[i]));
             view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
@@ -187,7 +195,6 @@
         a.href = url;
         a.download = `voice_${Date.now()}.wav`;
         a.click();
-        statusText.innerText = "保存完了";
     }
 </script>
 </body>

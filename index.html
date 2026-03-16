@@ -29,6 +29,8 @@
     <p id="status">Ready</p>
     <div class="info">
         ・マイクの許可が必要です<br>
+        ・他に開いてるものを閉じると遅延が少なくできる可能性があります<br>
+        ・長い録音は上手く保存ができない場合があります<br>
         ・ハウリング検知で自動停止します
     </div>
 </div>
@@ -66,7 +68,7 @@
             } else {
                 const lat = (audioContext.baseLatency || 0) + (audioContext.outputLatency || 0);
                 const latMs = (lat * 1000).toFixed(1);
-                statusText.innerText = `モニター中 (遅延: ${latMs}ms)`;
+                statusText.innerText = `モニター中 (遅延(推定): ${latMs}ms)`;
             }
         }
         requestAnimationFrame(monitorStatus);

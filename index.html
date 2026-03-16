@@ -35,7 +35,7 @@
 
 <script>
     let audioContext;
-    let microphone, lowCut, highCut, reverbNode, masterGain, dryGain, reverbGain;
+    let microphone, reverbNode, masterGain, dryGain, reverbGain;
     let analyser, mediaRecorder;
     let audioChunks = [];
     let isReverbOn = false;
@@ -49,22 +49,20 @@
     const mainCard = document.getElementById('mainCard');
 
     function createReverb(context) {
-        const delay = context.createDelay(0.1);
-        delay.delayTime.value = 0.04;
+        // 最速のためディレイ時間をさらに短縮
+        const delay = context.createDelay(0.05);
+        delay.delayTime.value = 0.03;
         const feedback = context.createGain();
-        feedback.gain.value = 0.35;
+        feedback.gain.value = 0.3;
         delay.connect(feedback);
         feedback.connect(delay);
         return delay;
     }
 
-    // 遅延を表示し続けるループ関数
     function monitorLatency() {
         if (audioContext && !isEmergencyStopped && !isRecording) {
-            // ブラウザが計算している総遅延（入力＋出力＋バッファ）の推定値
             const lat = (audioContext.baseLatency || 0) + (audioContext.outputLatency || 0);
-            const latMs = (lat * 1000).toFixed(1);
-            statusText.innerText = `モニター中 (遅延: ${latMs}ms)`;
+            statusText.innerText = `モニター中 (推定: ${(lat * 1000).toFixed(1)}ms)`;
         }
         if (audioContext) requestAnimationFrame(monitorLatency);
     }
@@ -81,17 +79,13 @@
                 }
             });
 
+            // 変換負荷をゼロにするため、ハードウェア標準の 48kHz を指定
             audioContext = new (window.AudioContext || window.webkitAudioContext)({
                 latencyHint: 0,
-                sampleRate: 44100 
+                sampleRate: 48000 
             });
 
             microphone = audioContext.createMediaStreamSource(stream);
-
-            lowCut = audioContext.createBiquadFilter();
-            lowCut.type = "highpass"; lowCut.frequency.value = 150;
-            highCut = audioContext.createBiquadFilter();
-            highCut.type = "lowpass"; highCut.frequency.value = 7000;
 
             dryGain = audioContext.createGain();
             reverbGain = audioContext.createGain();
@@ -99,27 +93,26 @@
 
             masterGain = audioContext.createGain();
             analyser = audioContext.createAnalyser();
-            analyser.fftSize = 256;
+            analyser.fftSize = 32; // 計算を軽くするため最小化
 
             reverbNode = createReverb(audioContext);
 
-            microphone.connect(lowCut);
-            lowCut.connect(highCut);
-            highCut.connect(dryGain);
+            // 最短経路で接続（フィルターを全削除）
+            microphone.connect(dryGain);
             dryGain.connect(masterGain);
-            highCut.connect(reverbNode);
+
+            microphone.connect(reverbNode);
             reverbNode.connect(reverbGain);
             reverbGain.connect(masterGain);
+
             masterGain.connect(analyser);
-            analyser.connect(audioContext.destination);
+            masterGain.connect(audioContext.destination);
 
             const destination = audioContext.createMediaStreamDestination();
             masterGain.connect(destination);
             mediaRecorder = new MediaRecorder(destination.stream);
             mediaRecorder.ondataavailable = (e) => audioChunks.push(e.data);
             mediaRecorder.onstop = async () => {
-                const tempStatus = statusText.innerText;
-                statusText.innerText = "音量最適化中...";
                 const blob = new Blob(audioChunks, { type: 'audio/wav' });
                 const normalizedBuffer = await normalizeAudio(blob);
                 const finalBlob = bufferToWav(normalizedBuffer);
@@ -127,8 +120,6 @@
                 const a = document.createElement('a'); a.href = url;
                 a.download = `voice_${Date.now()}.wav`; a.click();
                 audioChunks = [];
-                statusText.innerText = "保存完了";
-                setTimeout(() => { if(!isEmergencyStopped) monitorLatency(); }, 2000);
             };
 
             const dataArray = new Float32Array(analyser.frequencyBinCount);
@@ -140,9 +131,9 @@
                     const s = Math.abs(dataArray[i]);
                     if (s > peak) peak = s;
                 }
-                if (peak > 0.90) {
+                if (peak > 0.95) {
                     isEmergencyStopped = true;
-                    masterGain.gain.setTargetAtTime(0, audioContext.currentTime, 0.01);
+                    masterGain.gain.value = 0;
                     mainCard.classList.add('danger');
                     statusText.innerText = "ハウリング検知：停止しました";
                 }
@@ -150,7 +141,7 @@
             };
             
             checkHowling();
-            monitorLatency(); // 遅延監視を開始
+            monitorLatency();
 
             startBtn.disabled = true;
             reverbBtn.disabled = false;
@@ -163,12 +154,12 @@
 
     reverbBtn.onclick = () => {
         if (!isReverbOn) {
-            reverbGain.gain.setValueAtTime(1, audioContext.currentTime);
+            reverbGain.gain.value = 1;
             reverbBtn.innerText = "お風呂場モード: ON";
             reverbBtn.classList.add('active');
             isReverbOn = true;
         } else {
-            reverbGain.gain.setValueAtTime(0, audioContext.currentTime);
+            reverbGain.gain.value = 0;
             reverbBtn.innerText = "お風呂場モード: OFF";
             reverbBtn.classList.remove('active');
             isReverbOn = false;
@@ -180,7 +171,6 @@
             mediaRecorder.start();
             isRecording = true;
             recordBtn.innerText = "停止 & 保存";
-            statusText.innerText = "● 録音中...";
         } else {
             mediaRecorder.stop();
             isRecording = false;
